@@ -108,7 +108,7 @@ input[type=range]{accent-color:var(--rh);min-width:0}
 
 <div id="app">
   <header class="top">
-    <div class="brand"><h1>Atril</h1><span>PSR-E463 · 61 teclas · Do2–Do7</span></div>
+    <div class="brand"><h1>Atril</h1><span>PSR-E463 · 61 teclas · Do2–Do7 · v3</span></div>
     <div class="songpick">
       <select id="songSel" aria-label="Canción"></select>
       <button class="btn" id="loadBtn" title="Cargar un archivo .mid">Cargar MIDI</button>
@@ -190,6 +190,7 @@ input[type=range]{accent-color:var(--rh);min-width:0}
     <p>Apagado, basta con tocar la nota correcta en cualquier octava. Así funciona aunque uses Transpose o el micrófono confunda octavas.</p>
     <div class="field"><span>Sensibilidad del micrófono</span><input type="range" id="sens" min="0" max="100" value="55" style="flex:1"></div>
     <div class="info" id="midiInfo">Cable USB sin conectar</div>
+    <p>¿El cable no responde? Abre la <a href="midi-test.html" style="color:var(--rh)">prueba del cable MIDI</a>: muestra todo lo que llega del teclado.</p>
     <p>Con micrófono, usa audífonos para el acompañamiento; si no, la app se escucha a sí misma. Para acordes y precisión total, conecta el <b>USB TO HOST</b> del E463 al computador y pulsa <b>Cable USB</b>.</p>
   </section>
   <section>
@@ -578,7 +579,7 @@ async function startMidi() {
         }
       });
       $('midiBtn').classList.toggle('on', n > 0);
-      $('midiInfo').textContent = n ? 'Conectado: ' + names.join(', ') + ' · notas recibidas: ' + midiCount : 'Sin teclado conectado';
+      midiNames = names; midiStatus(n);
       if (!quiet) toast(n ? 'Teclado conectado: ' + names.join(', ') + '. Presiona una tecla: debe ponerse verde en la pantalla.' : 'No encuentro el teclado. Conecta el cable USB al puerto USB TO HOST del E463.');
     };
     midiAcc.onstatechange = () => bind(false); bind(false);
@@ -588,14 +589,18 @@ async function startMidi() {
       : 'No pude abrir el MIDI (' + (e && e.name || 'error') + '). Prueba recargar la página.');
   }
 }
-let midiCount = 0;
+let midiCount = 0, midiAll = 0, midiNames = [];
+function midiStatus(n) {
+  $('midiInfo').textContent = (n ?? midiNames.length) ? 'Conectado: ' + midiNames.join(', ') + ' · mensajes: ' + midiAll + ' · notas: ' + midiCount : 'Sin teclado conectado';
+}
 function onMidiMsg(e) {
   const [st, a, b] = e.data, ty = st & 0xF0;
+  midiAll++;
   if (ty === 0x90 && b > 0) {
     S.held.add(a); midiCount++;
-    $('midiInfo').textContent = $('midiInfo').textContent.replace(/notas recibidas: \d+/, 'notas recibidas: ' + midiCount);
     showKey(a); onInput(a, 'midi');
   }
+  if (midiAll < 5 || midiAll % 10 === 0 || ty === 0x90) midiStatus();
   else if (ty === 0x80 || (ty === 0x90 && b === 0)) S.held.delete(a);
 }
 let keyT = 0;

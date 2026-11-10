@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Prueba MIDI</title>
+<style>
+:root{--bg:#11131a;--panel:#191c26;--line:#2e3346;--text:#e9e7e2;--muted:#979db2;--ok:#35c98a;--bad:#ff5b61;--warn:#ffb340;--acc:#4d8dff;color-scheme:dark}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:760px;margin:0 auto;padding:16px;display:flex;flex-direction:column;gap:14px}
+h1{font-size:20px;margin:0}
+p{margin:0;color:var(--muted)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+.card h2{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button{font:inherit;color:inherit;background:#232736;border:1px solid var(--line);border-radius:6px;padding:9px 14px;cursor:pointer}
+button.main{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600}
+.big{font-size:44px;font-weight:700;font-family:ui-monospace,Menlo,Consolas,monospace;min-height:56px}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:14px}
+.kv b{color:var(--muted);font-weight:500}
+.ok{color:var(--ok)} .bad{color:var(--bad)} .warn{color:var(--warn)}
+#log{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;max-height:40vh;overflow:auto;white-space:pre-wrap;background:#0c0e13;border-radius:6px;padding:8px}
+.verdict{font-weight:600;font-size:16px}
+</style>
+</head>
+<body>
+<main>
+  <h1>Prueba del cable MIDI</h1>
+  <p>Conecta el teclado y toca <b>Conectar</b>. Luego presiona teclas en el piano.</p>
+
+  <div class="card">
+    <div class="row">
+      <button class="main" id="go">Conectar</button>
+      <button id="send" disabled>Hacer sonar el teclado</button>
+      <button id="clear">Borrar registro</button>
+    </div>
+    <div class="verdict" id="verdict">Todavía sin conectar.</div>
+  </div>
+
+  <div class="card">
+    <h2>Última tecla recibida</h2>
+    <div class="big" id="last">—</div>
+    <div class="kv">
+      <b>Mensajes recibidos</b><span id="cAll">0</span>
+      <b>Notas (Note On)</b><span id="cNote">0</span>
+      <b>Otros mensajes</b><span id="cOther">0</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Dispositivos</h2>
+    <div id="ports" class="kv"><b>Entradas</b><span>—</span><b>Salidas</b><span>—</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Navegador</h2>
+    <div class="kv" id="env"></div>
+  </div>
+
+  <div class="card">
+    <h2>Registro</h2>
+    <div id="log"></div>
+  </div>
+</main>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const NAMES = ['Do','Do♯','Re','Re♯','Mi','Fa','Fa♯','Sol','Sol♯','La','La♯','Si'];
+  const nm = m => NAMES[m % 12] + (Math.floor(m / 12) - 1);
+  const hex = d => Array.from(d, b => b.toString(16).toUpperCase().padStart(2, '0')).join(' ');
+  let acc = null, cAll = 0, cNote = 0, cOther = 0;
+  const bound = new WeakSet();
+
+  function log(msg, cls) {
+    const line = document.createElement('div');
+    if (cls) line.className = cls;
+    line.textContent = new Date().toLocaleTimeString() + '  ' + msg;
+    $('log').prepend(line);
+    while ($('log').childNodes.length > 300) $('log').lastChild.remove();
+  }
+  function verdict(msg, cls) { const v = $('verdict'); v.textContent = msg; v.className = 'verdict ' + (cls || ''); }
+
+  // entorno
+  const chrome = (navigator.userAgent.match(/Chrome\/(\d+)/) || [])[1];
+  const envRows = [
+    ['Página segura (HTTPS)', window.isSecureContext ? 'sí' : 'NO'],
+    ['Web MIDI disponible', navigator.requestMIDIAccess ? 'sí' : 'NO'],
+    ['Versión de Chrome', chrome || 'no es Chrome'],
+    ['Sistema', /Android/.test(navigator.userAgent) ? 'Android' : /iPad|iPhone|Macintosh/.test(navigator.userAgent) && 'ontouchend' in document ? 'iPad / iOS' : navigator.platform || '?'],
+  ];
+  $('env').innerHTML = '';
+  envRows.forEach(([k, v]) => { const b = document.createElement('b'); b.textContent = k; const s = document.createElement('span'); s.textContent = v; if (v === 'NO') s.className = 'bad'; $('env').append(b, s); });
+  if (navigator.permissions && navigator.permissions.query) {
+    navigator.permissions.query({ name: 'midi', sysex: false }).then(p => {
+      const b = document.createElement('b'); b.textContent = 'Permiso MIDI'; const s = document.createElement('span');
+      const show = () => { s.textContent = { granted: 'permitido', denied: 'BLOQUEADO', prompt: 'preguntará al conectar' }[p.state] || p.state; s.className = p.state === 'denied' ? 'bad' : ''; };
+      show(); p.onchange = show; $('env').append(b, s);
+    }).catch(() => {});
+  }
+
+  function describe(d) {
+    const st = d[0], ty = st & 0xF0, ch = (st & 0x0F) + 1;
+    if (ty === 0x90 && d[2] > 0) return 'Nota ON  ' + nm(d[1]) + '  fuerza ' + d[2] + '  canal ' + ch;
+    if (ty === 0x80 || (ty === 0x90 && d[2] === 0)) return 'Nota OFF ' + nm(d[1]) + '  canal ' + ch;
+    if (ty === 0xB0) return 'Control ' + d[1] + ' = ' + d[2] + '  canal ' + ch + (d[1] === 64 ? ' (pedal)' : '');
+    if (ty === 0xC0) return 'Cambio de voz ' + d[1] + '  canal ' + ch;
+    if (ty === 0xE0) return 'Pitch bend  canal ' + ch;
+    if (st === 0xFE) return 'Active Sensing (señal de "sigo conectado")';
+    if (st === 0xF8) return 'Reloj MIDI';
+    if (st === 0xFA || st === 0xFB || st === 0xFC) return 'Start/Continue/Stop';
+    if (st === 0xF0) return 'SysEx';
+    return 'Otro mensaje';
+  }
+  let activeSensingLogged = 0;
+  function onMsg(e) {
+    const d = e.data; cAll++; $('cAll').textContent = cAll;
+    const st = d[0], ty = st & 0xF0;
+    if (ty === 0x90 && d[2] > 0) {
+      cNote++; $('cNote').textContent = cNote; $('last').textContent = nm(d[1]); $('last').className = 'big ok';
+      verdict('✓ Funciona: el teclado está enviando notas a la tablet.', 'ok');
+    } else { cOther++; $('cOther').textContent = cOther; }
+    if (st === 0xFE || st === 0xF8) {           // no inundar el registro
+      if (activeSensingLogged++ < 3) log((e.target && e.target.name || '?') + '  [' + hex(d) + ']  ' + describe(d) + (activeSensingLogged === 3 ? '  (no se mostrarán más)' : ''));
+      if (!cNote) verdict('Llegan datos del teclado, pero todavía no llega ninguna nota. Presiona una tecla.', 'warn');
+      return;
+    }
+    log((e.target && e.target.name || '?') + '  [' + hex(d) + ']  ' + describe(d), ty === 0x90 && d[2] > 0 ? 'ok' : '');
+  }
+
+  function refresh() {
+    const ins = [], outs = [];
+    acc.inputs.forEach(p => {
+      ins.push(p.name + ' (' + (p.manufacturer || 's/fabricante') + ') · ' + p.state + '/' + p.connection);
+      if (!bound.has(p)) {
+        bound.add(p);
+        p.addEventListener('midimessage', onMsg);
+        if (p.open) p.open().then(() => log('Entrada abierta: ' + p.name, 'ok')).catch(err => log('No pude abrir ' + p.name + ': ' + err, 'bad'));
+      }
+    });
+    acc.outputs.forEach(p => outs.push(p.name + ' · ' + p.state + '/' + p.connection));
+    const box = $('ports'); box.innerHTML = '';
+    const add = (k, v, cls) => { const b = document.createElement('b'); b.textContent = k; const s = document.createElement('span'); s.textContent = v; if (cls) s.className = cls; box.append(b, s); };
+    add('Entradas', ins.length ? ins.join('\n') : 'ninguna', ins.length ? '' : 'bad');
+    add('Salidas', outs.length ? outs.join('\n') : 'ninguna');
+    $('send').disabled = !outs.length;
+    if (!ins.length) verdict('Chrome no ve ningún teclado. Revisa el cable y el adaptador OTG, y que esté en el puerto USB TO HOST.', 'bad');
+    else if (!cAll) verdict('Teclado detectado. Presiona teclas en el piano y mira si sube "Mensajes recibidos".', 'warn');
+  }
+
+  $('go').onclick = async () => {
+    if (!navigator.requestMIDIAccess) { verdict('Este navegador no tiene Web MIDI. En Android usa Google Chrome actualizado.', 'bad'); return; }
+    try {
+      acc = await navigator.requestMIDIAccess({ sysex: false });
+      log('Acceso MIDI concedido', 'ok');
+      acc.onstatechange = e => { log('Cambio: ' + e.port.type + ' "' + e.port.name + '" → ' + e.port.state + '/' + e.port.connection); refresh(); };
+      refresh();
+    } catch (err) {
+      log('Error: ' + err.name + ' — ' + err.message, 'bad');
+      verdict(err.name === 'NotAllowedError' || err.name === 'SecurityError'
+        ? 'Chrome bloqueó el MIDI. Toca el candado junto a la dirección → Permisos → MIDI → Permitir, y recarga.'
+        : 'No se pudo abrir el MIDI: ' + err.name, 'bad');
+    }
+  };
+  $('send').onclick = () => {
+    let n = 0;
+    acc.outputs.forEach(o => { n++; o.send([0x90, 60, 100]); o.send([0x80, 60, 0], performance.now() + 600); });
+    log('Envié Do4 al teclado por ' + n + ' salida(s). Si sonó, el cable funciona en ese sentido.');
+  };
+  $('clear').onclick = () => { $('log').innerHTML = ''; };
+})();
+</script>
+</body>
+</html>
