@@ -48,6 +48,7 @@ select{background:var(--raise);border:1px solid var(--line);border-radius:6px;pa
 .kb{height:clamp(64px,15vh,124px);flex:none;border-top:2px solid #000}
 .prompt{position:absolute;left:50%;top:10px;transform:translateX(-50%);background:rgba(17,19,26,.86);border:1px solid var(--line);border-radius:6px;padding:6px 12px;font-weight:600;white-space:nowrap;pointer-events:none}
 .prompt b{font-family:var(--mono);font-weight:500}
+.lastkey{position:absolute;right:10px;top:10px;background:var(--ok);color:#06281a;border-radius:6px;padding:4px 10px;font-weight:700;font-family:var(--mono);font-size:15px;pointer-events:none}
 .drop{position:absolute;inset:0;display:grid;place-items:center;background:rgba(77,141,255,.14);border:2px dashed var(--rh);font-weight:600;font-size:16px;pointer-events:none}
 
 /* dock */
@@ -124,6 +125,7 @@ input[type=range]{accent-color:var(--rh);min-width:0}
     <div class="stage" id="stageWrap">
       <canvas id="stage"></canvas>
       <div class="prompt" id="prompt" hidden></div>
+      <div class="lastkey" id="lastKey" hidden></div>
       <div class="drop" id="drop" hidden>Suelta el archivo .mid para cargarlo</div>
     </div>
     <div class="kb"><canvas id="kb" aria-label="Teclado de 61 teclas"></canvas></div>
@@ -187,6 +189,7 @@ input[type=range]{accent-color:var(--rh);min-width:0}
     <label class="check"><input type="checkbox" id="exactChk"><span>Exigir la octava exacta</span></label>
     <p>Apagado, basta con tocar la nota correcta en cualquier octava. Así funciona aunque uses Transpose o el micrófono confunda octavas.</p>
     <div class="field"><span>Sensibilidad del micrófono</span><input type="range" id="sens" min="0" max="100" value="55" style="flex:1"></div>
+    <div class="info" id="midiInfo">Cable USB sin conectar</div>
     <p>Con micrófono, usa audífonos para el acompañamiento; si no, la app se escucha a sí misma. Para acordes y precisión total, conecta el <b>USB TO HOST</b> del E463 al computador y pulsa <b>Cable USB</b>.</p>
   </section>
   <section>
@@ -561,23 +564,42 @@ let midiAcc = null;
 async function startMidi() {
   if (!navigator.requestMIDIAccess) { toast('Este navegador no tiene MIDI. Usa Chrome o Edge en el computador.'); return; }
   try {
-    midiAcc = await navigator.requestMIDIAccess();
-    const bind = () => {
-      let n = 0, names = [];
-      midiAcc.inputs.forEach(inp => { inp.onmidimessage = onMidiMsg; n++; names.push(inp.name); });
+    midiAcc = await navigator.requestMIDIAccess({ sysex: false });
+    const bound = new WeakSet();
+    const bind = (quiet) => {
+      let n = 0; const names = [];
+      midiAcc.inputs.forEach(inp => {
+        if (inp.state === 'disconnected') return;
+        n++; names.push(inp.name || 'MIDI');
+        if (!bound.has(inp)) {
+          bound.add(inp);
+          inp.addEventListener('midimessage', onMidiMsg);   // abrir el puerto explícitamente: algunos Chrome de Android no entregan notas si no
+          if (inp.open) inp.open().catch(() => {});
+        }
+      });
       $('midiBtn').classList.toggle('on', n > 0);
-      toast(n ? 'Teclado conectado: ' + names.join(', ') : 'No encuentro el teclado. Conecta el cable USB al puerto USB TO HOST del E463.');
+      $('midiInfo').textContent = n ? 'Conectado: ' + names.join(', ') + ' · notas recibidas: ' + midiCount : 'Sin teclado conectado';
+      if (!quiet) toast(n ? 'Teclado conectado: ' + names.join(', ') + '. Presiona una tecla: debe ponerse verde en la pantalla.' : 'No encuentro el teclado. Conecta el cable USB al puerto USB TO HOST del E463.');
     };
-    midiAcc.onstatechange = bind; bind();
+    midiAcc.onstatechange = () => bind(false); bind(false);
   } catch (e) {
-    toast('Esta vista bloquea el MIDI. Descarga el archivo de la app y ábrelo en Chrome para usar el cable USB.');
+    toast(e && e.name === 'NotAllowedError'
+      ? 'Chrome bloqueó el permiso MIDI. Toca el candado junto a la dirección, activa "Dispositivos MIDI" y recarga.'
+      : 'No pude abrir el MIDI (' + (e && e.name || 'error') + '). Prueba recargar la página.');
   }
 }
+let midiCount = 0;
 function onMidiMsg(e) {
   const [st, a, b] = e.data, ty = st & 0xF0;
-  if (ty === 0x90 && b > 0) { S.held.add(a); onInput(a, 'midi'); }
+  if (ty === 0x90 && b > 0) {
+    S.held.add(a); midiCount++;
+    $('midiInfo').textContent = $('midiInfo').textContent.replace(/notas recibidas: \d+/, 'notas recibidas: ' + midiCount);
+    showKey(a); onInput(a, 'midi');
+  }
   else if (ty === 0x80 || (ty === 0x90 && b === 0)) S.held.delete(a);
 }
+let keyT = 0;
+function showKey(m) { const k = $('lastKey'); k.textContent = nmo(m); k.hidden = false; clearTimeout(keyT); keyT = setTimeout(() => k.hidden = true, 1500); }
 
 const same = (a, b) => S.exact ? a === b : ((a - b) % 12 + 12) % 12 === 0;
 function onInput(m, src) {
@@ -736,7 +758,7 @@ function drawKeyboard() {
     const x = KX[m], w = KW[m];
     c.fillStyle = wrong(m) ? COL.bad : exp.has(m) ? handCol(exp.get(m)) : COL['white-key'];
     rr(c, x + .5, -4, w - 1, H + 1, 3); c.fill();
-    if (pressed(m)) { c.fillStyle = 'rgba(0,0,0,.22)'; rr(c, x + .5, -4, w - 1, H + 1, 3); c.fill(); c.fillStyle = COL.ok; c.fillRect(x + 2, H - 5, w - 4, 3); }
+    if (pressed(m)) { c.fillStyle = rgba(COL.ok, .85); rr(c, x + .5, -4, w - 1, H + 1, 3); c.fill(); }
     if (m === 60) { c.fillStyle = exp.has(m) ? '#fff' : COL.ink; c.beginPath(); c.arc(x + w / 2, H - 22, 2.3, 0, 7); c.fill(); }
     if (m % 12 === 0 && w >= 9) { c.fillStyle = exp.has(m) ? '#fff' : '#7d7f88'; c.fillText(S.names === 'es' ? 'Do' + (m / 12 - 1) : 'C' + (m / 12 - 1), x + w / 2, H - 8); }
   }
@@ -745,7 +767,7 @@ function drawKeyboard() {
     const x = KX[m], w = KW[m];
     c.fillStyle = wrong(m) ? COL.bad : exp.has(m) ? handCol(exp.get(m)) : COL['black-key'];
     rr(c, x, -4, w, bh + 4, 2); c.fill();
-    if (pressed(m)) { c.fillStyle = COL.ok; c.fillRect(x + 2, bh - 6, w - 4, 3); }
+    if (pressed(m)) { c.fillStyle = COL.ok; rr(c, x, -4, w, bh + 4, 2); c.fill(); }
   }
 }
 
