@@ -37,6 +37,17 @@ button.main{background:var(--acc);border-color:var(--acc);color:#fff;font-weight
     <div class="verdict" id="verdict">Todavía sin conectar.</div>
   </div>
 
+  <div class="card" id="help" hidden>
+    <h2>Cómo hacer que la tablet vea el teclado</h2>
+    <ol style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px">
+      <li><b>Cable:</b> adaptador <b>OTG</b> (USB‑C macho → USB‑A hembra) + cable <b>USB A‑B</b> (tipo impresora) al puerto <b>USB TO HOST</b> del E463. Un cable de carga normal no sirve.</li>
+      <li><b>Enciende el teclado</b> antes de conectarlo.</li>
+      <li>Baja la barra de notificaciones de Android, toca la notificación de <b>USB</b> y elige <b>«USB controlado por: este dispositivo»</b>. No elijas «MIDI» en «Usar USB para»: eso convierte la tablet en el periférico.</li>
+      <li>Si Android pregunta qué app usar con el dispositivo USB, acepta.</li>
+      <li>Vuelve aquí, recarga y toca <b>Conectar</b>. Debe aparecer un nombre como «Digital Keyboard» o «Yamaha».</li>
+    </ol>
+  </div>
+
   <div class="card">
     <h2>Última tecla recibida</h2>
     <div class="big" id="last">—</div>
@@ -143,7 +154,10 @@ button.main{background:var(--acc);border-color:var(--acc);color:#fff;font-weight
     add('Entradas', ins.length ? ins.join('\n') : 'ninguna', ins.length ? '' : 'bad');
     add('Salidas', outs.length ? outs.join('\n') : 'ninguna');
     $('send').disabled = !outs.length;
-    if (!ins.length) verdict('Chrome no ve ningún teclado. Revisa el cable y el adaptador OTG, y que esté en el puerto USB TO HOST.', 'bad');
+    const real = []; acc.inputs.forEach(p => { if (!/perif[eé]ric|peripheral/i.test(p.name || '')) real.push(p); });
+    $('help').hidden = !(ins.length && !real.length);
+    if (ins.length && !real.length) verdict('✗ La tablet NO ve tu teclado. "Puerto USB de periféricos" es la propia tablet, no el piano. Mira los pasos de abajo.', 'bad');
+    else if (!ins.length) verdict('Chrome no ve ningún teclado. Revisa el cable y el adaptador OTG, y que esté en el puerto USB TO HOST.', 'bad');
     else if (!cAll) verdict('Teclado detectado. Presiona teclas en el piano y mira si sube "Mensajes recibidos".', 'warn');
   }
 

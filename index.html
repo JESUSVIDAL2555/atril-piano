@@ -108,7 +108,7 @@ input[type=range]{accent-color:var(--rh);min-width:0}
 
 <div id="app">
   <header class="top">
-    <div class="brand"><h1>Atril</h1><span>PSR-E463 · 61 teclas · Do2–Do7 · v3</span></div>
+    <div class="brand"><h1>Atril</h1><span>PSR-E463 · 61 teclas · Do2–Do7 · v4</span></div>
     <div class="songpick">
       <select id="songSel" aria-label="Canción"></select>
       <button class="btn" id="loadBtn" title="Cargar un archivo .mid">Cargar MIDI</button>
@@ -568,9 +568,11 @@ async function startMidi() {
     midiAcc = await navigator.requestMIDIAccess({ sysex: false });
     const bound = new WeakSet();
     const bind = (quiet) => {
-      let n = 0; const names = [];
+      let n = 0, periph = 0; const names = [];
       midiAcc.inputs.forEach(inp => {
         if (inp.state === 'disconnected') return;
+        // "Puerto USB de periféricos" / "Android USB Peripheral Port" es la propia tablet, no un teclado
+        if (/perif[eé]ric|peripheral/i.test(inp.name || '')) { periph++; return; }
         n++; names.push(inp.name || 'MIDI');
         if (!bound.has(inp)) {
           bound.add(inp);
@@ -580,7 +582,10 @@ async function startMidi() {
       });
       $('midiBtn').classList.toggle('on', n > 0);
       midiNames = names; midiStatus(n);
-      if (!quiet) toast(n ? 'Teclado conectado: ' + names.join(', ') + '. Presiona una tecla: debe ponerse verde en la pantalla.' : 'No encuentro el teclado. Conecta el cable USB al puerto USB TO HOST del E463.');
+      if (!n && periph) $('midiInfo').textContent = 'La tablet no ve el teclado (solo su propio puerto de periféricos)';
+      if (!quiet) toast(n ? 'Teclado conectado: ' + names.join(', ') + '. Presiona una tecla: debe ponerse verde en la pantalla.'
+        : periph ? 'La tablet no ve tu teclado: lo único conectado es su propio «Puerto USB de periféricos». Usa un adaptador OTG (USB‑C macho a USB‑A hembra) con un cable USB A‑B al puerto USB TO HOST del E463, enciende el teclado, y en la notificación de USB de Android elige «USB controlado por: este dispositivo».'
+        : 'No encuentro el teclado. Conecta el cable USB al puerto USB TO HOST del E463.', n ? 5200 : 15000);
     };
     midiAcc.onstatechange = () => bind(false); bind(false);
   } catch (e) {
@@ -901,7 +906,7 @@ function renderTracks() {
   }
 }
 let toastT = 0;
-function toast(msg) { const t = $('toast'); t.textContent = msg; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => t.hidden = true, 5200); }
+function toast(msg, ms = 5200) { const t = $('toast'); t.textContent = msg; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => t.hidden = true, ms); }
 
 /* ---------------- Library (per-browser) ---------------- */
 const LIB = 'atril.songs.v1', PREF = 'atril.prefs.v1', LAST = 'atril.last.v1';
